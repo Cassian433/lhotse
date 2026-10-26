@@ -817,6 +817,28 @@ class TestLazyRepeaterStateful:
 
             assert first_k + remaining == all_items
 
+    def test_restore_at_epoch_boundary(self, tmp_path):
+        with jsonl_file(tmp_path, n=5) as p:
+            inner_full = LazyJsonlIterator(p)
+            rep_full = LazyRepeater(inner_full, times=3, preserve_id=True)
+            all_items = list(rep_full)
+
+            # Interrupted right after the last item of epoch 1.
+            inner1 = LazyJsonlIterator(p)
+            rep1 = LazyRepeater(inner1, times=3, preserve_id=True)
+            gen1 = iter(rep1)
+            first_k = consume(gen1, 10)
+            sd = rep1.state_dict()
+
+            # The restored epoch 1 yields nothing, which must not be mistaken
+            # for a source that can be iterated only once.
+            inner2 = LazyJsonlIterator(p)
+            rep2 = LazyRepeater(inner2, times=3, preserve_id=True)
+            rep2.load_state_dict(sd)
+            remaining = list(rep2)
+
+            assert first_k + remaining == all_items
+
     def test_epoch_tracking(self):
         rep = LazyRepeater([1, 2], times=3)
         gen = iter(rep)
