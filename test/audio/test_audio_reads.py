@@ -10,12 +10,13 @@ import torch
 
 import lhotse
 from lhotse import AudioSource, Recording
-from lhotse.audio import suppress_audio_loading_errors
+from lhotse.audio import AudioLoadingError, suppress_audio_loading_errors
 from lhotse.audio.backend import (
     info,
     read_audio,
     read_opus_ffmpeg,
     read_opus_torchaudio,
+    read_sph,
     save_audio,
     torchaudio_info,
     torchaudio_load,
@@ -99,6 +100,37 @@ def test_opus_name_with_whitespaces():
         shutil.copy("test/fixtures/mono_c0.opus", path_with_ws)
         r = Recording.from_file(path_with_ws)
         r.load_audio()  # does not raise
+
+
+def test_sph_name_with_whitespaces():
+    with TemporaryDirectory() as d:
+        path_with_ws = Path(d) / "white space.sph"
+        shutil.copy("test/fixtures/stereo.sph", path_with_ws)
+        audio = Recording.from_file(path_with_ws).load_audio()
+        expected = Recording.from_file("test/fixtures/stereo.sph").load_audio()
+        np.testing.assert_array_equal(audio, expected)
+
+
+def test_opus_ffmpeg_name_with_single_quote():
+    with TemporaryDirectory() as d:
+        path_with_quote = Path(d) / "it's.opus"
+        shutil.copy("test/fixtures/mono_c0.opus", path_with_quote)
+        audio, sr = read_opus_ffmpeg(path_with_quote)
+        expected, expected_sr = read_opus_ffmpeg("test/fixtures/mono_c0.opus")
+        assert sr == expected_sr
+        np.testing.assert_array_equal(audio, expected)
+
+
+def test_opus_ffmpeg_missing_ffmpeg(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(AudioLoadingError, match="'ffmpeg' binary is not installed"):
+        read_opus_ffmpeg("test/fixtures/mono_c0.opus")
+
+
+def test_sph_missing_sph2pipe(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(ValueError, match="'sph2pipe' binary is not installed"):
+        read_sph("test/fixtures/stereo.sph")
 
 
 @pytest.mark.skipif(not is_torchaudio_available(), reason="Requires torchaudio")

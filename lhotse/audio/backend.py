@@ -2,13 +2,14 @@ import contextlib
 import logging
 import os
 import re
+import shlex
 import sys
 import traceback
 from contextlib import contextmanager
 from functools import lru_cache
 from io import BytesIO, IOBase
 from pathlib import Path
-from subprocess import PIPE, CalledProcessError, run
+from subprocess import PIPE, run
 from typing import Any, Generator, List, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
@@ -1498,31 +1499,36 @@ def read_opus_ffmpeg(
     force_opus_sampling_rate: Optional[int] = None,
 ) -> Tuple[np.ndarray, int]:
     """
-    Reads OPUS files using ffmpeg in a shell subprocess.
+    Reads OPUS files using ffmpeg in a subprocess.
     Unlike audioread, correctly supports offsets and durations for reading short chunks.
     Optionally, we can force ffmpeg to resample to the true sampling rate (if we know it up-front).
 
     :return: a tuple of audio samples and the sampling rate.
     """
     # Construct the ffmpeg command depending on the arguments passed.
-    cmd = "ffmpeg -threads 1"
+    cmd = ["ffmpeg", "-threads", "1"]
     sampling_rate = 48000
     # Note: we have to add offset and duration options (-ss and -t) BEFORE specifying the input
     #       (-i), otherwise ffmpeg will decode everything and trim afterwards...
     if offset > 0:
-        cmd += f" -ss {offset}"
+        cmd += ["-ss", str(offset)]
     if duration is not None:
-        cmd += f" -t {duration}"
+        cmd += ["-t", str(duration)]
     # Add the input specifier after offset and duration.
-    cmd += f" -i '{path}'"
+    cmd += ["-i", str(path)]
     # Optionally resample the output.
     if force_opus_sampling_rate is not None:
         sampling_rate = force_opus_sampling_rate
-    cmd += f" -ar {sampling_rate}"
+    cmd += ["-ar", str(sampling_rate)]
     # Read audio samples directly as float32.
-    cmd += " -f f32le -threads 1 pipe:1"
+    cmd += ["-f", "f32le", "-threads", "1", "pipe:1"]
     # Actual audio reading.
-    proc = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
+    try:
+        proc = run(cmd, stdout=PIPE, stderr=PIPE)
+    except FileNotFoundError:
+        raise AudioLoadingError(
+            "It seems that 'ffmpeg' binary is not installed or not on PATH."
+        )
     raw_audio = proc.stdout
     audio = np.frombuffer(raw_audio, dtype=np.float32)
     # Determine if the recording is mono or stereo and decode accordingly.
@@ -1541,7 +1547,7 @@ def read_opus_ffmpeg(
             )
     except ValueError as e:
         raise AudioLoadingError(
-            f"{e}\nThe ffmpeg command for which the program failed is: '{cmd}', error code: {proc.returncode}"
+            f"{e}\nThe ffmpeg command for which the program failed is: '{shlex.join(cmd)}', error code: {proc.returncode}"
         )
     return audio, sampling_rate
 
@@ -1604,7 +1610,7 @@ def read_sph(
     sph_path: Pathlike, offset: Seconds = 0.0, duration: Optional[Seconds] = None
 ) -> Tuple[np.ndarray, int]:
     """
-    Reads SPH files using sph2pipe in a shell subprocess.
+    Reads SPH files using sph2pipe in a subprocess.
     Unlike audioread, correctly supports offsets and durations for reading short chunks.
 
     :return: a tuple of audio samples and the sampling rate.
@@ -1613,26 +1619,21 @@ def read_sph(
     sph_path = Path(sph_path)
 
     # Construct the sph2pipe command depending on the arguments passed.
-    cmd = f"sph2pipe -f wav -p -t {offset}:"
+    cmd = ["sph2pipe", "-f", "wav", "-p", "-t", f"{offset}:"]
 
     if duration is not None:
-        cmd += f"{round(offset + duration, 5)}"
+        cmd[-1] += f"{round(offset + duration, 5)}"
     # Add the input specifier after offset and duration.
-    cmd += f" {sph_path}"
+    cmd += [str(sph_path)]
 
     # Actual audio reading.
     try:
-        proc = BytesIO(
-            run(cmd, shell=True, check=True, stdout=PIPE, stderr=PIPE).stdout
+        proc = BytesIO(run(cmd, check=True, stdout=PIPE, stderr=PIPE).stdout)
+    except FileNotFoundError:
+        raise ValueError(
+            "It seems that 'sph2pipe' binary is not installed; "
+            "did you run 'lhotse install-sph2pipe'?"
         )
-    except CalledProcessError as e:
-        if e.returncode == 127:
-            raise ValueError(
-                "It seems that 'sph2pipe' binary is not installed; "
-                "did you run 'lhotse install-sph2pipe'?"
-            )
-        else:
-            raise
 
     import soundfile as sf
 
